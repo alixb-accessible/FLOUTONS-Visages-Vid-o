@@ -22,7 +22,8 @@
         .btn{transition:all .3s;font-weight:600;}
         .btn:disabled{opacity:.4;cursor:not-allowed;}
         @keyframes spin{to{transform:rotate(360deg)}}.animate-spin{animation:spin 1s linear infinite;}
-        .video-container{background:#000;border-radius:12px;overflow:hidden;max-height:70vh;}
+        .video-container{background:#000;border-radius:12px;overflow:hidden;max-height:70vh;display:flex;align-items:center;justify-content:center;}
+        .video-container video{max-width:100%;max-height:70vh;width:auto;height:auto;}
         .sidebar{background:#222;border-radius:12px;padding:1.5rem;}
         .progress-ring{transform:rotate(-90deg);}
     </style>
@@ -109,8 +110,8 @@
 
 <div id="faces-section" class="hidden">
 <div class="flex justify-between items-center mb-3">
-<h3 class="text-white font-semibold text-sm">Visages détectés (<span id="faces-count">0</span>)</h3>
-<button id="add-manual" class="text-xs bg-orange-600 text-white px-3 py-1 rounded hover:bg-orange-500">+ Ajouter</button>
+<h3 class="text-white font-semibold text-sm">Visages (<span id="faces-count">0</span>)</h3>
+<button id="add-manual" class="text-xs bg-orange-600 text-white px-3 py-1.5 rounded hover:bg-orange-500 font-semibold">+ Manuel</button>
 </div>
 <div class="flex gap-2 mb-3">
 <button id="select-all" class="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-500 flex-1">Tout</button>
@@ -376,7 +377,7 @@ chk.className='mr-1';
 const lbl=document.createElement('label');
 lbl.className='text-white text-xs flex items-center justify-center';
 lbl.appendChild(chk);
-lbl.appendChild(document.createTextNode(`Visage ${p.id+1}`));
+lbl.appendChild(document.createTextNode(p.isManual?`Visage ${p.id+1} (M)`:`Visage ${p.id+1}`));
 
 card.appendChild(img);
 card.appendChild(lbl);
@@ -393,6 +394,136 @@ displayFaces();
 selectNone.onclick=()=>{
 selectedFaceIds.clear();
 displayFaces();
+};
+
+// Ajout manuel de visage
+addManual.onclick=()=>{
+video.pause();
+const overlay=document.createElement('div');
+overlay.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.95);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;';
+
+const container=document.createElement('div');
+container.style.cssText='position:relative;max-width:90%;max-height:80%;';
+
+const videoClone=document.createElement('video');
+videoClone.src=video.src;
+videoClone.currentTime=video.currentTime;
+videoClone.controls=true;
+videoClone.style.cssText='max-width:100%;max-height:70vh;';
+
+const canvas=document.createElement('canvas');
+canvas.style.cssText='position:absolute;top:0;left:0;cursor:crosshair;pointer-events:auto;';
+
+const instructions=document.createElement('div');
+instructions.className='bg-gray-800 p-4 rounded-lg mt-4 text-center';
+instructions.innerHTML='<p class="text-white font-semibold mb-3">Cliquez et glissez sur un visage pour créer une zone de floutage</p><div class="flex gap-3 justify-center"><button id="manual-done" class="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-500 font-semibold">Terminer</button><button id="manual-cancel" class="bg-gray-600 text-white px-6 py-2 rounded hover:bg-gray-500 font-semibold">Annuler</button></div>';
+
+container.appendChild(videoClone);
+container.appendChild(canvas);
+overlay.appendChild(container);
+overlay.appendChild(instructions);
+document.body.appendChild(overlay);
+
+videoClone.onloadedmetadata=()=>{
+canvas.width=videoClone.videoWidth;
+canvas.height=videoClone.videoHeight;
+canvas.style.width=videoClone.offsetWidth+'px';
+canvas.style.height=videoClone.offsetHeight+'px';
+};
+
+const ctx=canvas.getContext('2d');
+let drawing=false,startX,startY;
+const manualFaces=[];
+
+canvas.onmousedown=canvas.ontouchstart=e=>{
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+const sx=canvas.width/rect.width,sy=canvas.height/rect.height;
+const clientX=e.touches?e.touches[0].clientX:e.clientX;
+const clientY=e.touches?e.touches[0].clientY:e.clientY;
+startX=(clientX-rect.left)*sx;
+startY=(clientY-rect.top)*sy;
+drawing=true;
+};
+
+canvas.onmousemove=canvas.ontouchmove=e=>{
+if(!drawing)return;
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+const sx=canvas.width/rect.width,sy=canvas.height/rect.height;
+const clientX=e.touches?e.touches[0].clientX:e.clientX;
+const clientY=e.touches?e.touches[0].clientY:e.clientY;
+const x=(clientX-rect.left)*sx,y=(clientY-rect.top)*sy;
+
+ctx.clearRect(0,0,canvas.width,canvas.height);
+manualFaces.forEach(f=>{
+ctx.strokeStyle='#3b82f6';
+ctx.lineWidth=3;
+ctx.beginPath();
+ctx.ellipse(f.x+f.width/2,f.y+f.height/2,f.width/2,f.height/2,0,0,2*Math.PI);
+ctx.stroke();
+});
+
+const w=Math.abs(x-startX),h=Math.abs(y-startY);
+ctx.strokeStyle='#22c55e';
+ctx.lineWidth=3;
+ctx.beginPath();
+ctx.ellipse(Math.min(startX,x)+w/2,Math.min(startY,y)+h/2,w/2,h/2,0,0,2*Math.PI);
+ctx.stroke();
+};
+
+canvas.onmouseup=canvas.ontouchend=e=>{
+if(!drawing)return;
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+const sx=canvas.width/rect.width,sy=canvas.height/rect.height;
+const clientX=e.changedTouches?e.changedTouches[0].clientX:e.clientX;
+const clientY=e.changedTouches?e.changedTouches[0].clientY:e.clientY;
+const x=(clientX-rect.left)*sx,y=(clientY-rect.top)*sy;
+const w=Math.abs(x-startX),h=Math.abs(y-startY);
+
+if(w>30&&h>30){
+manualFaces.push({
+x:Math.min(startX,x),
+y:Math.min(startY,y),
+width:w,
+height:h,
+time:videoClone.currentTime
+});
+}
+drawing=false;
+};
+
+document.getElementById('manual-done').onclick=()=>{
+manualFaces.forEach(face=>{
+const faceId=detectedFaces.length;
+const tc=document.createElement('canvas');
+tc.width=100;tc.height=100;
+const tctx=tc.getContext('2d');
+videoClone.currentTime=face.time;
+setTimeout(()=>{
+const tempC=document.createElement('canvas');
+tempC.width=videoClone.videoWidth;
+tempC.height=videoClone.videoHeight;
+const tempCtx2=tempC.getContext('2d');
+tempCtx2.drawImage(videoClone,0,0);
+tctx.drawImage(tempC,face.x,face.y,face.width,face.height,0,0,100,100);
+detectedFaces.push({
+id:faceId,
+faces:[face],
+thumbnail:tc.toDataURL(),
+isManual:true
+});
+selectedFaceIds.add(faceId);
+displayFaces();
+},100);
+});
+document.body.removeChild(overlay);
+};
+
+document.getElementById('manual-cancel').onclick=()=>{
+document.body.removeChild(overlay);
+};
 };
 
 // Traitement avec VRAI tracking
