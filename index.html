@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Floutage de Visages - Ovale</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface@0.0.7/dist/blazeface.js"></script>
+    <link rel="stylesheet" href="https://alixb-accessible.github.io/faites-mieux-toolbar/faites-mieux.css">
+    <script src="https://alixb-accessible.github.io/faites-mieux-toolbar/faites-mieux.js" defer></script>
+    <style>
+        body{background:linear-gradient(135deg,#4a4a4a 0%,#4a4a4a 14.28%,#22c55e 14.28%,#22c55e 28.56%,#3b82f6 28.56%,#3b82f6 42.84%,#fff 42.84%,#fff 57.12%,#fbbf24 57.12%,#fbbf24 71.4%,#dc2626 71.4%,#dc2626 85.68%,#4a4a4a 85.68%,#4a4a4a 100%);min-height:100vh}
+        .btn{transition:all .3s}.btn:focus{outline:0;box-shadow:0 0 0 4px rgba(59,130,246,.5)}.btn:disabled{opacity:.5;cursor:not-allowed}
+        @keyframes spin{to{transform:rotate(360deg)}}.animate-spin{animation:spin 1s linear infinite}
+        .video-wrap{position:relative;display:inline-block;max-width:100%}
+        .overlay-canvas{position:absolute;top:0;left:0;cursor:crosshair;pointer-events:auto}
+        .zone{position:absolute;border:3px solid #3b82f6;border-radius:50%;cursor:move;background:rgba(59,130,246,.1)}
+        .zone:hover{border-color:#2563eb;background:rgba(59,130,246,.2)}.zone.sel{border-color:#ef4444;background:rgba(239,68,68,.2)}
+        .handle{position:absolute;bottom:-6px;right:-6px;width:12px;height:12px;background:#fff;border:2px solid #3b82f6;border-radius:50%;cursor:nwse-resize}
+        .del{position:absolute;top:-10px;right:-10px;width:24px;height:24px;background:#ef4444;color:#fff;border-radius:50%;border:2px solid #fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700}
+        .del:hover{background:#dc2626}
+    </style>
+</head>
+<body class="p-4 md:p-8">
+<div class="max-w-5xl mx-auto"><div class="bg-white rounded-lg shadow-2xl p-4 md:p-8">
+<h1 class="text-3xl md:text-4xl font-bold text-gray-800 mb-2 text-center">Floutage de Visages</h1>
+<p class="text-gray-600 text-center mb-6">Détection automatique et floutage ovale des visages</p>
+
+<div class="mb-6 border border-gray-300 rounded-lg">
+<button id="help-toggle" class="w-full px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-t-lg flex items-center justify-between" aria-expanded="false">
+<span class="font-semibold text-gray-700">ℹ️ Mode d'emploi</span>
+<svg id="help-icon" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+</button>
+<div id="help-content" class="hidden px-4 py-3 text-sm space-y-3">
+<div><h3 class="font-semibold text-blue-600">💻 Sur ordinateur :</h3>
+<ol class="list-decimal list-inside ml-2 space-y-1">
+<li>Importez votre vidéo</li>
+<li>Cliquez "Détecter" pour l'auto-détection</li>
+<li><strong>Ajouter :</strong> Cliquez + glissez sur la vidéo</li>
+<li><strong>Déplacer :</strong> Glissez le centre</li>
+<li><strong>Redimensionner :</strong> Point blanc en bas à droite</li>
+<li><strong>Supprimer :</strong> ✕ rouge ou touche Suppr</li>
+<li>Ajustez le flou puis cliquez "Traiter"</li>
+</ol></div>
+<div><h3 class="font-semibold text-green-600">📱 Sur mobile :</h3>
+<ol class="list-decimal list-inside ml-2 space-y-1">
+<li>Importez votre vidéo</li>
+<li>Touchez + glissez pour créer des ovales</li>
+<li>Touchez pour sélectionner/ajuster</li>
+<li>✕ pour supprimer</li>
+<li>Ajustez le flou et traitez</li>
+</ol>
+<p class="text-orange-600 font-medium mt-2">⚠️ Peut être lent sur mobile</p></div>
+<div class="bg-blue-50 p-3 rounded"><p class="text-blue-800">🔒 <strong>Confidentialité :</strong> Tout est traité localement. Aucune donnée envoyée.</p></div>
+</div></div>
+
+<div id="mobile-warn" class="hidden bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
+<p class="text-orange-800 font-semibold">📱 Appareil mobile détecté</p>
+<p class="text-orange-700 text-sm">Détection auto désactivée. Utilisez le mode manuel.</p>
+</div>
+
+<div id="loading" class="hidden bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 flex items-center gap-3">
+<svg class="animate-spin h-5 w-5 text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+<p class="text-blue-800">Chargement du modèle...</p>
+</div>
+
+<div id="error" class="hidden bg-red-50 border border-red-200 rounded-lg p-4 mb-6" role="alert">
+<p id="error-msg" class="text-red-800"></p>
+</div>
+
+<div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 mb-6">
+<input type="file" id="upload" accept="video/*" class="hidden">
+<button id="upload-btn" class="btn bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 font-medium">📤 Choisir une vidéo</button>
+<p class="text-gray-500 mt-4 text-sm">MP4, WebM, MOV</p>
+</div>
+
+<div id="edit-section" class="hidden space-y-4">
+<div class="bg-gray-50 rounded-lg p-4">
+<div class="flex justify-between mb-3 flex-wrap gap-2">
+<h2 class="text-lg font-semibold">Édition</h2>
+<div class="flex gap-2">
+<button id="detect-btn" class="btn bg-purple-500 text-white px-4 py-2 rounded text-sm hover:bg-purple-600">🔍 Détecter</button>
+<button id="clear-btn" class="btn bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">🗑️ Effacer</button>
+</div></div>
+
+<div class="video-wrap bg-black rounded overflow-hidden mb-4" id="video-container">
+<video id="video" class="w-full" controls></video>
+<canvas id="canvas"></canvas>
+<div id="zones"></div>
+</div>
+
+<div><label class="block text-sm font-medium mb-1">Intensité du flou : <span id="blur-val">20</span>px</label>
+<input type="range" id="blur-slider" min="5" max="50" value="20" class="w-full"></div>
+
+<div class="text-sm bg-blue-50 p-3 rounded">
+<p class="font-medium text-blue-800">💡 Astuce :</p>
+<p><strong>Ajouter :</strong> Clic + glisser • <strong>Déplacer :</strong> Glisser le centre • <strong>Taille :</strong> Point blanc • <strong>Suppr :</strong> ✕ ou Del</p>
+</div></div>
+
+<button id="process-btn" disabled class="btn w-full bg-green-500 text-white px-6 py-3 rounded-lg hover:bg-green-600 font-medium">▶️ Traiter la vidéo</button>
+</div>
+
+<div id="progress" class="hidden mb-6">
+<div class="flex justify-between text-sm mb-1"><span>Traitement...</span><span id="prog-pct">0%</span></div>
+<div class="w-full bg-gray-200 rounded-full h-3"><div id="prog-bar" class="bg-green-500 h-full" style="width:0%"></div></div>
+</div>
+
+<div id="result" class="hidden space-y-4">
+<div class="bg-gray-50 rounded-lg p-4">
+<h2 class="text-lg font-semibold mb-3">Résultat</h2>
+<video id="result-video" controls class="w-full rounded"></video>
+</div>
+<button id="download-btn" class="btn w-full bg-purple-500 text-white px-6 py-3 rounded-lg hover:bg-purple-600 font-medium">💾 Télécharger</button>
+</div>
+
+<canvas id="proc-canvas" style="display:none"></canvas>
+</div>
+
+<footer class="mt-8 text-center text-white text-sm">🔒 Traitement local - Vos données restent privées</footer>
+</div>
+
+<script>
+let model,videoURL,blurZones=[],sel=null,drawing=false,start=null,dragging=false,resizing=false,offset={x:0,y:0};
+const mobile=/Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const $=(id)=>document.getElementById(id);
+const helpToggle=$('help-toggle'),helpContent=$('help-content'),helpIcon=$('help-icon');
+const mobileWarn=$('mobile-warn'),loading=$('loading'),error=$('error'),errorMsg=$('error-msg');
+const uploadBtn=$('upload-btn'),upload=$('upload'),editSection=$('edit-section'),video=$('video');
+const canvas=$('canvas'),zones=$('zones'),detectBtn=$('detect-btn'),clearBtn=$('clear-btn');
+const blurSlider=$('blur-slider'),blurVal=$('blur-val'),processBtn=$('process-btn');
+const progress=$('progress'),progBar=$('prog-bar'),progPct=$('prog-pct');
+const result=$('result'),resultVideo=$('result-video'),downloadBtn=$('download-btn');
+const procCanvas=$('proc-canvas'),ctx=procCanvas.getContext('2d');
+
+helpToggle.onclick=()=>{
+const h=helpContent.classList.toggle('hidden');
+helpIcon.style.transform=h?'rotate(0)':'rotate(180deg)';
+helpToggle.setAttribute('aria-expanded',!h);
+};
+
+if(mobile){mobileWarn.classList.remove('hidden');detectBtn.style.display='none';}
+
+async function loadModel(){
+if(mobile)return;
+loading.classList.remove('hidden');
+try{await tf.ready();model=await blazeface.load();loading.classList.add('hidden');}
+catch(e){loading.classList.add('hidden');showError('Modèle non chargé - mode manuel');detectBtn.disabled=true;}
+}
+
+function showError(m){errorMsg.textContent=m;error.classList.remove('hidden');}
+
+uploadBtn.onclick=()=>upload.click();
+upload.onchange=e=>{
+const f=e.target.files[0];
+if(f&&f.type.startsWith('video/')){
+if(videoURL)URL.revokeObjectURL(videoURL);
+videoURL=URL.createObjectURL(f);
+video.src=videoURL;
+editSection.classList.remove('hidden');
+result.classList.add('hidden');
+error.classList.add('hidden');
+blurZones=[];
+updateZones();
+video.onloadedmetadata=()=>{
+const c=video.parentElement;
+canvas.width=video.videoWidth;
+canvas.height=video.videoHeight;
+canvas.style.width=video.offsetWidth+'px';
+canvas.style.height=video.offsetHeight+'px';
+canvas.style.position='absolute';
+canvas.style.top='0';
+canvas.style.left='0';
+};
+}else showError('Fichier invalide');
+};
+
+blurSlider.oninput=e=>blurVal.textContent=e.target.value;
+
+detectBtn.onclick=async()=>{
+if(!model)return;
+detectBtn.disabled=true;
+detectBtn.textContent='⏳ Détection...';
+try{
+video.currentTime=0;
+await new Promise(r=>video.onseeked=r);
+const tc=document.createElement('canvas');
+tc.width=video.videoWidth;tc.height=video.videoHeight;
+const tctx=tc.getContext('2d');
+tctx.drawImage(video,0,0);
+const pred=await model.estimateFaces(tc,false);
+pred.forEach(p=>{
+const[x1,y1]=p.topLeft,[x2,y2]=p.bottomRight;
+const w=x2-x1,h=y2-y1,pad=0.3;
+blurZones.push({x:x1-w*pad/2,y:y1-h*pad/2,width:w*(1+pad),height:h*(1+pad)});
+});
+updateZones();
+processBtn.disabled=!blurZones.length;
+}catch(e){showError('Erreur détection');}
+detectBtn.disabled=false;
+detectBtn.textContent='🔍 Détecter';
+};
+
+clearBtn.onclick=()=>{blurZones=[];updateZones();processBtn.disabled=true;};
+
+function updateZones(){
+zones.innerHTML='';
+blurZones.forEach((z,i)=>{
+const d=document.createElement('div');
+d.className='zone'+(sel===i?' sel':'');
+const r=canvas.getBoundingClientRect();
+const sx=r.width/canvas.width,sy=r.height/canvas.height;
+d.style.left=(z.x*sx)+'px';
+d.style.top=(z.y*sy)+'px';
+d.style.width=(z.width*sx)+'px';
+d.style.height=(z.height*sy)+'px';
+const del=document.createElement('div');
+del.className='del';
+del.textContent='✕';
+del.onclick=e=>{e.stopPropagation();blurZones.splice(i,1);updateZones();processBtn.disabled=!blurZones.length;};
+d.appendChild(del);
+const handle=document.createElement('div');
+handle.className='handle';
+d.appendChild(handle);
+d.onmousedown=d.ontouchstart=e=>{
+e.preventDefault();
+sel=i;
+updateZones();
+const t=e.touches?e.touches[0]:e;
+if(e.target.classList.contains('handle')){
+resizing=true;
+}else{
+dragging=true;
+offset={x:t.clientX-d.offsetLeft,y:t.clientY-d.offsetTop};
+}
+};
+zones.appendChild(d);
+});
+processBtn.disabled=!blurZones.length;
+}
+
+canvas.onmousedown=canvas.ontouchstart=e=>{
+if(dragging||resizing)return;
+e.preventDefault();
+const r=canvas.getBoundingClientRect();
+const sx=canvas.width/r.width,sy=canvas.height/r.height;
+const t=e.touches?e.touches[0]:e;
+const x=(t.clientX-r.left)*sx,y=(t.clientY-r.top)*sy;
+drawing=true;
+start={x,y};
+};
+
+document.onmousemove=document.ontouchmove=e=>{
+if(drawing){
+e.preventDefault();
+const r=canvas.getBoundingClientRect();
+const sx=canvas.width/r.width,sy=canvas.height/r.height;
+const t=e.touches?e.touches[0]:e;
+const x=(t.clientX-r.left)*sx,y=(t.clientY-r.top)*sy;
+const w=Math.abs(x-start.x),h=Math.abs(y-start.y);
+if(w>10&&h>10){
+blurZones[blurZones.length-1]={x:Math.min(start.x,x),y:Math.min(start.y,y),width:w,height:h};
+updateZones();
+}
+}else if(dragging&&sel!==null){
+e.preventDefault();
+const r=canvas.getBoundingClientRect();
+const sx=canvas.width/r.width,sy=canvas.height/r.height;
+const t=e.touches?e.touches[0]:e;
+blurZones[sel].x=(t.clientX-offset.x-r.left)*sx;
+blurZones[sel].y=(t.clientY-offset.y-r.top)*sy;
+updateZones();
+}else if(resizing&&sel!==null){
+e.preventDefault();
+const r=canvas.getBoundingClientRect();
+const sx=canvas.width/r.width,sy=canvas.height/r.height;
+const t=e.touches?e.touches[0]:e;
+const z=blurZones[sel];
+const nx=(t.clientX-r.left)*sx,ny=(t.clientY-r.top)*sy;
+z.width=Math.max(20,nx-z.x);
+z.height=Math.max(20,ny-z.y);
+updateZones();
+}
+};
+
+document.onmouseup=document.ontouchend=()=>{
+if(drawing&&start){
+const w=blurZones[blurZones.length-1]?.width||0;
+if(w>10){sel=blurZones.length-1;}else{blurZones.pop();}
+updateZones();
+}
+drawing=false;dragging=false;resizing=false;start=null;
+};
+
+document.onkeydown=e=>{
+if(e.key==='Delete'&&sel!==null){blurZones.splice(sel,1);sel=null;updateZones();}
+};
+
+canvas.onmousedown=canvas.ontouchstart=(function(orig){
+return function(e){
+const z=Array.from(zones.children).find(d=>d.contains(e.target));
+if(!z&&!e.target.classList.contains('handle')){
+blurZones.push({x:0,y:0,width:0,height:0});
+}
+orig.call(this,e);
+};
+})(canvas.onmousedown||canvas.ontouchstart);
+
+processBtn.onclick=async()=>{
+processBtn.disabled=true;
+progress.classList.remove('hidden');
+error.classList.add('hidden');
+try{
+await new Promise(r=>video.onloadedmetadata=()=>{
+procCanvas.width=video.videoWidth;
+procCanvas.height=video.videoHeight;
+r();
+});
+const stream=procCanvas.captureStream(30);
+const rec=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp9',videoBitsPerSecond:5e6});
+const chunks=[];
+rec.ondataavailable=e=>chunks.push(e.data);
+rec.onstop=()=>{
+const blob=new Blob(chunks,{type:'video/webm'});
+resultVideo.src=URL.createObjectURL(blob);
+progress.classList.add('hidden');
+result.classList.remove('hidden');
+processBtn.disabled=false;
+};
+rec.start();
+video.currentTime=0;
+video.play();
+const blur=blurSlider.value;
+async function frame(){
+if(video.paused||video.ended){rec.stop();return;}
+ctx.filter='none';
+ctx.drawImage(video,0,0);
+blurZones.forEach(z=>{
+ctx.save();
+ctx.beginPath();
+ctx.ellipse(z.x+z.width/2,z.y+z.height/2,z.width/2,z.height/2,0,0,2*Math.PI);
+ctx.clip();
+ctx.filter=`blur(${blur}px)`;
+ctx.drawImage(video,0,0);
+ctx.restore();
+});
+const p=(video.currentTime/video.duration)*100;
+progBar.style.width=p+'%';
+progPct.textContent=Math.round(p)+'%';
+requestAnimationFrame(frame);
+}
+frame();
+}catch(e){showError('Erreur traitement');processBtn.disabled=false;progress.classList.add('hidden');}
+};
+
+downloadBtn.onclick=()=>{
+const a=document.createElement('a');
+a.href=resultVideo.src;
+a.download='video-floutee.webm';
+a.click();
+};
+
+loadModel();
+</script>
+</body>
+</html>
