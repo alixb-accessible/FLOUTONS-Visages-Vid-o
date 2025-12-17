@@ -90,13 +90,32 @@
 </div></div>
 
 <div class="video-wrap bg-black rounded overflow-hidden mb-4 relative" id="video-container">
-<video id="video" class="w-full"></video>
+<video id="video" class="w-full" controls></video>
 <div id="draw-area" class="draw-area"></div>
 <div id="zones" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></div>
 </div>
 
 <div class="mb-3"><label class="block text-sm font-medium mb-1">Intensité du flou : <span id="blur-val">20</span> pixels</label>
 <input type="range" id="blur-slider" min="5" max="50" value="20" class="w-full"></div>
+
+<div class="mb-3">
+<label class="block text-sm font-medium mb-2">Qualité du traitement</label>
+<div class="space-y-2">
+<label class="flex items-center cursor-pointer">
+<input type="radio" name="quality" value="fast" class="mr-2">
+<span class="text-sm"><strong>Rapide</strong> - 15 fps, résolution réduite (2-3x plus rapide)</span>
+</label>
+<label class="flex items-center cursor-pointer">
+<input type="radio" name="quality" value="balanced" checked class="mr-2">
+<span class="text-sm"><strong>Équilibré</strong> - 20 fps, bonne qualité (recommandé)</span>
+</label>
+<label class="flex items-center cursor-pointer">
+<input type="radio" name="quality" value="high" class="mr-2">
+<span class="text-sm"><strong>Haute qualité</strong> - 30 fps, qualité maximale (plus lent)</span>
+</label>
+</div>
+<p id="time-estimate" class="text-xs text-gray-500 mt-2"></p>
+</div>
 
 <div class="text-sm bg-blue-50 p-3 rounded">
 <p class="font-medium text-blue-800 mb-1">Astuces</p>
@@ -140,6 +159,8 @@ const blurSlider=$('blur-slider'),blurVal=$('blur-val'),processBtn=$('process-bt
 const progress=$('progress'),progBar=$('prog-bar'),progPct=$('prog-pct');
 const result=$('result'),resultVideo=$('result-video'),downloadBtn=$('download-btn');
 const procCanvas=$('proc-canvas'),ctx=procCanvas.getContext('2d');
+const timeEstimate=$('time-estimate');
+const qualityRadios=document.querySelectorAll('input[name="quality"]');
 
 helpToggle.onclick=()=>{
 const h=helpContent.classList.toggle('hidden');
@@ -190,17 +211,43 @@ error.classList.add('hidden');
 blurZones=[];
 updateZones();
 video.onloadedmetadata=()=>{
-console.log('Vidéo chargée:',video.videoWidth,'x',video.videoHeight);
+console.log('Vidéo chargée:',video.videoWidth,'x',video.videoHeight,'durée:',video.duration,'s');
 const container=$('video-container');
 drawArea.style.width=video.offsetWidth+'px';
 drawArea.style.height=video.offsetHeight+'px';
 zones.style.width=video.offsetWidth+'px';
 zones.style.height=video.offsetHeight+'px';
+updateTimeEstimate();
 };
 }else{
 showError('Fichier vidéo invalide');
 }
 };
+
+function updateTimeEstimate(){
+if(!video.duration)return;
+const quality=document.querySelector('input[name="quality"]:checked').value;
+const duration=video.duration;
+const isLarge=video.videoWidth>1920||video.videoHeight>1080||duration>300;
+let timePerSec;
+if(isLarge){
+timePerSec=quality==='fast'?1.5:(quality==='balanced'?2.5:4);
+}else{
+timePerSec=quality==='fast'?1:(quality==='balanced'?2:3);
+}
+const estimatedTime=Math.ceil(duration*timePerSec);
+const mins=Math.floor(estimatedTime/60);
+const secs=estimatedTime%60;
+let timeStr=mins>0?`${mins} min ${secs} s`:`${secs} secondes`;
+timeEstimate.textContent=`Temps estimé : environ ${timeStr}`;
+if(isLarge){
+timeEstimate.textContent+=` (vidéo volumineuse détectée - qualité réduite automatiquement)`;
+}
+}
+
+qualityRadios.forEach(radio=>{
+radio.onchange=updateTimeEstimate;
+});
 
 blurSlider.oninput=e=>blurVal.textContent=e.target.value;
 
@@ -392,6 +439,8 @@ return;
 }
 console.log('Démarrage traitement avec',validZones.length,'zones');
 processBtn.disabled=true;
+const origText=processBtn.textContent;
+processBtn.textContent='Traitement en cours...';
 progress.classList.remove('hidden');
 error.classList.add('hidden');
 try{
@@ -404,11 +453,27 @@ r();
 video.onloadedmetadata=r;
 }
 });
-procCanvas.width=video.videoWidth;
-procCanvas.height=video.videoHeight;
-console.log('Canvas:',procCanvas.width,'x',procCanvas.height);
-const stream=procCanvas.captureStream(30);
-const rec=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp9',videoBitsPerSecond:5e6});
+
+const quality=document.querySelector('input[name="quality"]:checked').value;
+const isLarge=video.videoWidth>1920||video.videoHeight>1080||video.duration>300;
+let targetFPS,scale;
+if(isLarge){
+scale=0.5;
+targetFPS=quality==='fast'?12:(quality==='balanced'?15:20);
+console.log('Vidéo volumineuse - réduction automatique');
+}else{
+scale=quality==='fast'?0.7:(quality==='balanced'?0.85:1);
+targetFPS=quality==='fast'?15:(quality==='balanced'?20:30);
+}
+
+const targetWidth=Math.round(video.videoWidth*scale);
+const targetHeight=Math.round(video.videoHeight*scale);
+procCanvas.width=targetWidth;
+procCanvas.height=targetHeight;
+console.log('Résolution traitement:',targetWidth,'x',targetHeight,'@',targetFPS,'fps');
+
+const stream=procCanvas.captureStream(targetFPS);
+const rec=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp9',videoBitsPerSecond:3e6});
 const chunks=[];
 rec.ondataavailable=e=>chunks.push(e.data);
 rec.onstop=()=>{
@@ -417,27 +482,41 @@ resultVideo.src=URL.createObjectURL(blob);
 progress.classList.add('hidden');
 result.classList.remove('hidden');
 processBtn.disabled=false;
+processBtn.textContent=origText;
 console.log('Traitement terminé');
 };
 rec.start();
 console.log('Enregistrement démarré');
 video.play();
-const blur=blurSlider.value;
-async function frame(){
+const blur=Math.round(blurSlider.value*scale);
+const frameInterval=1000/(targetFPS*2);
+let lastFrameTime=0;
+
+async function frame(timestamp){
 if(video.paused||video.ended){
 console.log('Fin vidéo');
 rec.stop();
 return;
 }
+if(timestamp-lastFrameTime<frameInterval){
+requestAnimationFrame(frame);
+return;
+}
+lastFrameTime=timestamp;
+
 ctx.filter='none';
-ctx.drawImage(video,0,0);
+ctx.drawImage(video,0,0,targetWidth,targetHeight);
 validZones.forEach(z=>{
+const zx=z.x*scale;
+const zy=z.y*scale;
+const zw=z.width*scale;
+const zh=z.height*scale;
 ctx.save();
 ctx.beginPath();
-ctx.ellipse(z.x+z.width/2,z.y+z.height/2,z.width/2,z.height/2,0,0,2*Math.PI);
+ctx.ellipse(zx+zw/2,zy+zh/2,zw/2,zh/2,0,0,2*Math.PI);
 ctx.clip();
 ctx.filter=`blur(${blur}px)`;
-ctx.drawImage(video,0,0);
+ctx.drawImage(video,0,0,targetWidth,targetHeight);
 ctx.restore();
 });
 const p=(video.currentTime/video.duration)*100;
@@ -445,11 +524,12 @@ progBar.style.width=p+'%';
 progPct.textContent=Math.round(p)+'%';
 requestAnimationFrame(frame);
 }
-frame();
+requestAnimationFrame(frame);
 }catch(e){
 console.error('Erreur traitement:',e);
 showError('Erreur lors du traitement de la vidéo');
 processBtn.disabled=false;
+processBtn.textContent=origText;
 progress.classList.add('hidden');
 }
 };
