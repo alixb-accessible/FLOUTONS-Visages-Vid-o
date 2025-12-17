@@ -107,6 +107,7 @@
 <div class="flex justify-between items-center mb-4">
 <h2 class="text-lg font-semibold">Sélectionnez les visages à flouter</h2>
 <div class="flex gap-2">
+<button id="add-manual" class="btn bg-orange-500 text-white px-4 py-2 rounded text-sm hover:bg-orange-600">Ajouter un visage manuellement</button>
 <button id="select-all" class="btn bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600">Tout sélectionner</button>
 <button id="select-none" class="btn bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">Tout désélectionner</button>
 </div>
@@ -163,6 +164,7 @@ let model=null;
 let videoURL=null;
 let detectedFaces=[];
 let selectedFaceIds=new Set();
+let faceTrackingHistory={}; // Historique des positions pour chaque visage
 
 // Éléments DOM
 const helpToggle=$('help-toggle');
@@ -188,6 +190,7 @@ const facesCount=$('faces-count');
 const facesGrid=$('faces-grid');
 const selectAll=$('select-all');
 const selectNone=$('select-none');
+const addManual=$('add-manual');
 const blurIntensity=$('blur-intensity');
 const blurVal=$('blur-val');
 const processBtn=$('process-btn');
@@ -275,7 +278,8 @@ blurIntensity.oninput=()=>blurVal.textContent=blurIntensity.value;
 function faceDistance(f1,f2){
 const dx=(f1.x+f1.width/2)-(f2.x+f2.width/2);
 const dy=(f1.y+f1.height/2)-(f2.y+f2.height/2);
-return Math.sqrt(dx*dx+dy*dy);
+const sizeDiff=Math.abs(f1.width-f2.width)+Math.abs(f1.height-f2.height);
+return Math.sqrt(dx*dx+dy*dy)+sizeDiff*0.5;
 }
 
 // Analyse de la vidéo
@@ -294,7 +298,7 @@ tempCanvas.width=video.videoWidth;
 tempCanvas.height=video.videoHeight;
 
 const duration=video.duration;
-const sampleInterval=0.5; // Échantillonner toutes les 0.5 secondes
+const sampleInterval=0.3; // Échantillonner toutes les 0.3 secondes (plus fréquent)
 const totalSamples=Math.ceil(duration/sampleInterval);
 let samplesProcessed=0;
 
@@ -314,6 +318,9 @@ const width=x2-x1;
 const height=y2-y1;
 const padding=0.4;
 
+// Ignorer les visages trop petits (moins de 30px)
+if(width<30||height<30)return;
+
 const face={
 x:Math.max(0,x1-width*padding/2),
 y:Math.max(0,y1-height*padding/2),
@@ -324,12 +331,23 @@ time:time
 
 // Vérifier si c'est un nouveau visage ou un existant
 let isNew=true;
+let minDist=Infinity;
+let closestPerson=null;
+
 for(let existing of detectedFaces){
-if(faceDistance(face,existing.faces[0])<100){
-existing.faces.push(face);
-isNew=false;
-break;
+const dist=faceDistance(face,existing.faces[0]);
+if(dist<minDist){
+minDist=dist;
+closestPerson=existing;
 }
+}
+
+// Distance seuil plus stricte pour mieux séparer les personnes
+const threshold=Math.min(face.width,face.height)*0.8;
+
+if(closestPerson&&minDist<threshold){
+closestPerson.faces.push(face);
+isNew=false;
 }
 
 if(isNew){
@@ -337,7 +355,8 @@ const faceId=detectedFaces.length;
 detectedFaces.push({
 id:faceId,
 faces:[face],
-thumbnail:null
+thumbnail:null,
+isManual:false
 });
 }
 });
@@ -391,6 +410,8 @@ person.thumbnail=thumbCanvas.toDataURL();
 
 analysisSection.classList.add('hidden');
 displayFaces();
+// Sélectionner tous les visages par défaut
+detectedFaces.forEach(p=>selectedFaceIds.add(p.id));
 selectionSection.classList.remove('hidden');
 analyzeBtn.disabled=false;
 
@@ -412,7 +433,7 @@ card.className='face-card p-3 rounded-lg cursor-pointer';
 card.onclick=()=>toggleFace(person.id,card);
 
 const img=document.createElement('img');
-img.src=person.thumbnail;
+img.src=person.thumbnail||'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="%23e5e7eb"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%236b7280" font-size="14">Chargement...</text></svg>';
 img.className='face-thumb mx-auto mb-2';
 img.alt=`Visage ${person.id+1}`;
 
@@ -420,18 +441,20 @@ const checkbox=document.createElement('input');
 checkbox.type='checkbox';
 checkbox.id=`face-${person.id}`;
 checkbox.className='mr-2';
-checkbox.checked=true;
-selectedFaceIds.add(person.id);
+checkbox.checked=selectedFaceIds.has(person.id);
 
 const label=document.createElement('label');
 label.htmlFor=`face-${person.id}`;
 label.className='flex items-center justify-center cursor-pointer';
 label.appendChild(checkbox);
-label.appendChild(document.createTextNode(`Visage ${person.id+1}`));
+const labelText=person.isManual?`Visage ${person.id+1} (manuel)`:`Visage ${person.id+1}`;
+label.appendChild(document.createTextNode(labelText));
 
 card.appendChild(img);
 card.appendChild(label);
+if(selectedFaceIds.has(person.id)){
 card.classList.add('selected');
+}
 facesGrid.appendChild(card);
 });
 }
@@ -464,6 +487,167 @@ c.querySelector('input').checked=false;
 });
 };
 
+// Ajout manuel de visage
+addManual.onclick=()=>{
+video.pause();
+const overlay=document.createElement('div');
+overlay.style.position='fixed';
+overlay.style.top='0';
+overlay.style.left='0';
+overlay.style.width='100%';
+overlay.style.height='100%';
+overlay.style.background='rgba(0,0,0,0.8)';
+overlay.style.zIndex='1000';
+overlay.style.display='flex';
+overlay.style.flexDirection='column';
+overlay.style.alignItems='center';
+overlay.style.justifyContent='center';
+overlay.style.padding='20px';
+
+const container=document.createElement('div');
+container.style.position='relative';
+container.style.maxWidth='90%';
+container.style.maxHeight='80%';
+
+const videoClone=document.createElement('video');
+videoClone.src=video.src;
+videoClone.currentTime=video.currentTime;
+videoClone.controls=true;
+videoClone.style.maxWidth='100%';
+videoClone.style.maxHeight='70vh';
+
+const canvas=document.createElement('canvas');
+canvas.style.position='absolute';
+canvas.style.top='0';
+canvas.style.left='0';
+canvas.style.cursor='crosshair';
+canvas.style.pointerEvents='auto';
+
+const instructions=document.createElement('div');
+instructions.className='bg-white p-4 rounded-lg mt-4 text-center';
+instructions.innerHTML='<p class="font-semibold mb-2">Cliquez et glissez sur un visage pour créer une zone de floutage</p><button id="manual-done" class="btn bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600 mr-2">Terminer</button><button id="manual-cancel" class="btn bg-gray-500 text-white px-6 py-2 rounded hover:bg-gray-600">Annuler</button>';
+
+container.appendChild(videoClone);
+container.appendChild(canvas);
+overlay.appendChild(container);
+overlay.appendChild(instructions);
+document.body.appendChild(overlay);
+
+videoClone.onloadedmetadata=()=>{
+canvas.width=videoClone.videoWidth;
+canvas.height=videoClone.videoHeight;
+canvas.style.width=videoClone.offsetWidth+'px';
+canvas.style.height=videoClone.offsetHeight+'px';
+};
+
+const ctx=canvas.getContext('2d');
+let drawing=false;
+let startX,startY;
+const manualFaces=[];
+
+canvas.onmousedown=canvas.ontouchstart=e=>{
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+const scaleX=canvas.width/rect.width;
+const scaleY=canvas.height/rect.height;
+const clientX=e.touches?e.touches[0].clientX:e.clientX;
+const clientY=e.touches?e.touches[0].clientY:e.clientY;
+startX=(clientX-rect.left)*scaleX;
+startY=(clientY-rect.top)*scaleY;
+drawing=true;
+};
+
+canvas.onmousemove=canvas.ontouchmove=e=>{
+if(!drawing)return;
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+const scaleX=canvas.width/rect.width;
+const scaleY=canvas.height/rect.height;
+const clientX=e.touches?e.touches[0].clientX:e.clientX;
+const clientY=e.touches?e.touches[0].clientY:e.clientY;
+const x=(clientX-rect.left)*scaleX;
+const y=(clientY-rect.top)*scaleY;
+
+ctx.clearRect(0,0,canvas.width,canvas.height);
+manualFaces.forEach(f=>{
+ctx.strokeStyle='#3b82f6';
+ctx.lineWidth=3;
+ctx.beginPath();
+ctx.ellipse(f.x+f.width/2,f.y+f.height/2,f.width/2,f.height/2,0,0,2*Math.PI);
+ctx.stroke();
+});
+
+const width=Math.abs(x-startX);
+const height=Math.abs(y-startY);
+ctx.strokeStyle='#22c55e';
+ctx.lineWidth=3;
+ctx.beginPath();
+ctx.ellipse(Math.min(startX,x)+width/2,Math.min(startY,y)+height/2,width/2,height/2,0,0,2*Math.PI);
+ctx.stroke();
+};
+
+canvas.onmouseup=canvas.ontouchend=e=>{
+if(!drawing)return;
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+const scaleX=canvas.width/rect.width;
+const scaleY=canvas.height/rect.height;
+const clientX=e.changedTouches?e.changedTouches[0].clientX:e.clientX;
+const clientY=e.changedTouches?e.changedTouches[0].clientY:e.clientY;
+const x=(clientX-rect.left)*scaleX;
+const y=(clientY-rect.top)*scaleY;
+const width=Math.abs(x-startX);
+const height=Math.abs(y-startY);
+
+if(width>30&&height>30){
+manualFaces.push({
+x:Math.min(startX,x),
+y:Math.min(startY,y),
+width:width,
+height:height,
+time:videoClone.currentTime
+});
+}
+drawing=false;
+};
+
+document.getElementById('manual-done').onclick=()=>{
+manualFaces.forEach(face=>{
+const faceId=detectedFaces.length;
+detectedFaces.push({
+id:faceId,
+faces:[face],
+thumbnail:null,
+isManual:true
+});
+
+const thumbCanvas=document.createElement('canvas');
+thumbCanvas.width=120;
+thumbCanvas.height=120;
+const thumbCtx=thumbCanvas.getContext('2d');
+videoClone.currentTime=face.time;
+setTimeout(()=>{
+const tc=document.createElement('canvas');
+tc.width=videoClone.videoWidth;
+tc.height=videoClone.videoHeight;
+const tctx=tc.getContext('2d');
+tctx.drawImage(videoClone,0,0);
+thumbCtx.drawImage(tc,face.x,face.y,face.width,face.height,0,0,120,120);
+detectedFaces[faceId].thumbnail=thumbCanvas.toDataURL();
+displayFaces();
+},100);
+});
+document.body.removeChild(overlay);
+if(manualFaces.length>0){
+setTimeout(()=>displayFaces(),200);
+}
+};
+
+document.getElementById('manual-cancel').onclick=()=>{
+document.body.removeChild(overlay);
+};
+};
+
 // Traitement
 processBtn.onclick=async()=>{
 if(selectedFaceIds.size===0){
@@ -474,6 +658,19 @@ return;
 processBtn.disabled=true;
 selectionSection.classList.add('hidden');
 processingSection.classList.remove('hidden');
+
+// Réinitialiser l'historique de tracking
+faceTrackingHistory={};
+detectedFaces.forEach(person=>{
+if(selectedFaceIds.has(person.id)){
+faceTrackingHistory[person.id]={
+positions:[],
+framesWithoutDetection:0,
+lastKnownPosition:null,
+velocity:{x:0,y:0}
+};
+}
+});
 
 try{
 processCanvas.width=video.videoWidth;
@@ -498,6 +695,7 @@ video.play();
 
 const blur=parseInt(blurIntensity.value);
 const startTime=Date.now();
+let frameCount=0;
 
 async function processFrame(){
 if(video.paused||video.ended){
@@ -506,11 +704,16 @@ console.log('Traitement terminé');
 return;
 }
 
+frameCount++;
+
 processCtx.filter='none';
 processCtx.drawImage(video,0,0);
 
 tempCtx.drawImage(video,0,0);
 const predictions=await model.estimateFaces(tempCanvas,false);
+
+// Map des visages détectés dans cette frame
+const detectedThisFrame=new Set();
 
 predictions.forEach(pred=>{
 const[x1,y1]=pred.topLeft;
@@ -527,6 +730,9 @@ height:height*(1+padding)
 };
 
 // Matcher avec les visages sélectionnés
+let bestMatch=null;
+let bestDist=Infinity;
+
 for(let person of detectedFaces){
 if(!selectedFaceIds.has(person.id))continue;
 
@@ -536,7 +742,31 @@ const dist=faceDistance(currentFace,knownFace);
 if(dist<minDist)minDist=dist;
 }
 
-if(minDist<150){
+if(minDist<150&&minDist<bestDist){
+bestDist=minDist;
+bestMatch=person.id;
+}
+}
+
+if(bestMatch!==null){
+detectedThisFrame.add(bestMatch);
+const history=faceTrackingHistory[bestMatch];
+
+// Calculer la vélocité
+if(history.lastKnownPosition){
+history.velocity={
+x:(currentFace.x-history.lastKnownPosition.x),
+y:(currentFace.y-history.lastKnownPosition.y)
+};
+}
+
+// Mettre à jour l'historique
+history.lastKnownPosition={...currentFace};
+history.framesWithoutDetection=0;
+history.positions.push({...currentFace});
+if(history.positions.length>10)history.positions.shift();
+
+// Appliquer le flou
 processCtx.save();
 processCtx.beginPath();
 const cx=currentFace.x+currentFace.width/2;
@@ -546,10 +776,40 @@ processCtx.clip();
 processCtx.filter=`blur(${blur}px)`;
 processCtx.drawImage(video,0,0);
 processCtx.restore();
-break;
-}
 }
 });
+
+// Gérer les visages non détectés (anti-saut)
+for(let personId of selectedFaceIds){
+if(detectedThisFrame.has(personId))continue;
+
+const history=faceTrackingHistory[personId];
+if(!history||!history.lastKnownPosition)continue;
+
+history.framesWithoutDetection++;
+
+// Si le visage n'a pas été détecté depuis moins de 15 frames, on continue de flouter
+if(history.framesWithoutDetection<15){
+// Prédire la position avec la vélocité
+const predictedFace={
+x:history.lastKnownPosition.x+history.velocity.x*history.framesWithoutDetection,
+y:history.lastKnownPosition.y+history.velocity.y*history.framesWithoutDetection,
+width:history.lastKnownPosition.width,
+height:history.lastKnownPosition.height
+};
+
+// Appliquer le flou à la position prédite
+processCtx.save();
+processCtx.beginPath();
+const cx=predictedFace.x+predictedFace.width/2;
+const cy=predictedFace.y+predictedFace.height/2;
+processCtx.ellipse(cx,cy,predictedFace.width/2,predictedFace.height/2,0,0,2*Math.PI);
+processCtx.clip();
+processCtx.filter=`blur(${blur}px)`;
+processCtx.drawImage(video,0,0);
+processCtx.restore();
+}
+}
 
 const progress=(video.currentTime/video.duration)*100;
 processingBar.style.width=progress+'%';
@@ -557,11 +817,11 @@ processingPercent.textContent=Math.round(progress)+'%';
 
 const elapsed=(Date.now()-startTime)/1000;
 const totalEstimated=elapsed/(progress/100);
-const remaining=totalEstimated-elapsed;
+const remaining=Math.max(0,totalEstimated-elapsed);
 const mins=Math.floor(remaining/60);
 const secs=Math.floor(remaining%60);
 timeRemaining.textContent=`${mins}:${secs.toString().padStart(2,'0')}`;
-processingStatus.textContent=`Frame ${Math.floor(video.currentTime*30)}/${Math.floor(video.duration*30)}`;
+processingStatus.textContent=`Frame ${frameCount}/${Math.floor(video.duration*30)} - ${selectedFaceIds.size} visage(s) tracké(s)`;
 
 requestAnimationFrame(processFrame);
 }
