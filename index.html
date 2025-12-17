@@ -251,17 +251,18 @@ start={x,y};
 };
 
 document.onmousemove=document.ontouchmove=e=>{
-if(drawing){
+if(drawing&&tempZone){
 e.preventDefault();
 const r=canvas.getBoundingClientRect();
 const sx=canvas.width/r.width,sy=canvas.height/r.height;
 const t=e.touches?e.touches[0]:e;
 const x=(t.clientX-r.left)*sx,y=(t.clientY-r.top)*sy;
 const w=Math.abs(x-start.x),h=Math.abs(y-start.y);
-if(w>10&&h>10){
-blurZones[blurZones.length-1]={x:Math.min(start.x,x),y:Math.min(start.y,y),width:w,height:h};
-updateZones();
-}
+tempZone.x=Math.min(start.x,x);
+tempZone.y=Math.min(start.y,y);
+tempZone.width=w;
+tempZone.height=h;
+if(w>5&&h>5)updateZones();
 }else if(dragging&&sel!==null){
 e.preventDefault();
 const r=canvas.getBoundingClientRect();
@@ -284,10 +285,18 @@ updateZones();
 };
 
 document.onmouseup=document.ontouchend=()=>{
-if(drawing&&start){
-const w=blurZones[blurZones.length-1]?.width||0;
-if(w>10){sel=blurZones.length-1;}else{blurZones.pop();}
+if(drawing){
+if(tempZone){
+const w=tempZone.width,h=tempZone.height;
+if(w<10||h<10){
+const idx=blurZones.indexOf(tempZone);
+if(idx>-1)blurZones.splice(idx,1);
+}else{
+sel=blurZones.length-1;
+}
+tempZone=null;
 updateZones();
+}
 }
 drawing=false;dragging=false;resizing=false;start=null;
 };
@@ -296,17 +305,23 @@ document.onkeydown=e=>{
 if(e.key==='Delete'&&sel!==null){blurZones.splice(sel,1);sel=null;updateZones();}
 };
 
-canvas.onmousedown=canvas.ontouchstart=(function(orig){
-return function(e){
-const z=Array.from(zones.children).find(d=>d.contains(e.target));
-if(!z&&!e.target.classList.contains('handle')){
-blurZones.push({x:0,y:0,width:0,height:0});
-}
-orig.call(this,e);
+let tempZone=null;
+
+canvas.onmousedown=canvas.ontouchstart=e=>{
+if(dragging||resizing)return;
+e.preventDefault();
+const r=canvas.getBoundingClientRect();
+const sx=canvas.width/r.width,sy=canvas.height/r.height;
+const t=e.touches?e.touches[0]:e;
+const x=(t.clientX-r.left)*sx,y=(t.clientY-r.top)*sy;
+drawing=true;
+start={x,y};
+tempZone={x,y,width:0,height:0};
+blurZones.push(tempZone);
 };
-})(canvas.onmousedown||canvas.ontouchstart);
 
 processBtn.onclick=async()=>{
+if(!blurZones.length){showError('Ajoutez au moins une zone à flouter');return;}
 processBtn.disabled=true;
 progress.classList.remove('hidden');
 error.classList.add('hidden');
