@@ -729,22 +729,36 @@ width:width*(1+padding),
 height:height*(1+padding)
 };
 
-// Matcher avec les visages sélectionnés
+// Matcher avec les visages sélectionnés en utilisant la dernière position connue
 let bestMatch=null;
 let bestDist=Infinity;
 
-for(let person of detectedFaces){
-if(!selectedFaceIds.has(person.id))continue;
+for(let personId of selectedFaceIds){
+const history=faceTrackingHistory[personId];
 
+// Si on a une position connue, comparer avec celle-ci
+if(history.lastKnownPosition){
+const dist=faceDistance(currentFace,history.lastKnownPosition);
+// Seuil adaptatif basé sur la taille du visage
+const threshold=Math.max(history.lastKnownPosition.width,history.lastKnownPosition.height)*1.5;
+if(dist<threshold&&dist<bestDist){
+bestDist=dist;
+bestMatch=personId;
+}
+}else{
+// Sinon, comparer avec les positions initiales
+const person=detectedFaces.find(p=>p.id===personId);
+if(!person)continue;
 let minDist=Infinity;
 for(let knownFace of person.faces){
 const dist=faceDistance(currentFace,knownFace);
 if(dist<minDist)minDist=dist;
 }
-
-if(minDist<150&&minDist<bestDist){
+const threshold=Math.max(currentFace.width,currentFace.height)*2;
+if(minDist<threshold&&minDist<bestDist){
 bestDist=minDist;
-bestMatch=person.id;
+bestMatch=personId;
+}
 }
 }
 
