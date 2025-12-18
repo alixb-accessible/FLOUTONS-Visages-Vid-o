@@ -14,7 +14,8 @@
             background:linear-gradient(135deg,#4a4a4a 0%,#4a4a4a 14.28%,#22c55e 14.28%,#22c55e 28.56%,#3b82f6 28.56%,#3b82f6 42.84%,#fff 42.84%,#fff 57.12%,#fbbf24 57.12%,#fbbf24 71.4%,#dc2626 71.4%,#dc2626 85.68%,#4a4a4a 85.68%,#4a4a4a 100%);
             min-height:100vh;
         }
-        .app-container{background:#1a1a1a;min-height:100vh;}
+        .app-container{min-height:100vh;}
+        .app-container.dark-mode{background:#1a1a1a;}
         .face-card{border:2px solid #333;transition:all .3s;background:#2a2a2a;}
         .face-card:hover{border-color:#3b82f6;background:#333;}
         .face-card.selected{border-color:#22c55e;background:#1e3a1e;}
@@ -225,6 +226,7 @@ if(!file||!file.type.startsWith('video/'))return showError('Fichier vidéo inval
 if(videoURL)URL.revokeObjectURL(videoURL);
 videoURL=URL.createObjectURL(file);
 video.src=videoURL;
+document.querySelector('.app-container').classList.add('dark-mode');
 mainSection.classList.remove('hidden');
 $('upload-section').classList.add('hidden');
 analysisSection.classList.add('hidden');
@@ -243,11 +245,27 @@ videoResolution.textContent=`${video.videoWidth}x${video.videoHeight}`;
 
 blurIntensity.oninput=()=>blurVal.textContent=blurIntensity.value;
 
-function faceDistance(f1,f2){
-const dx=(f1.x+f1.width/2)-(f2.x+f2.width/2);
-const dy=(f1.y+f1.height/2)-(f2.y+f2.height/2);
-const sizeDiff=Math.abs(f1.width-f2.width)+Math.abs(f1.height-f2.height);
-return Math.sqrt(dx*dx+dy*dy)+sizeDiff*0.3;
+// Calcul IoU (Intersection over Union) - meilleur que distance euclidienne
+function calculateIoU(box1,box2){
+const x1=Math.max(box1.x,box2.x);
+const y1=Math.max(box1.y,box2.y);
+const x2=Math.min(box1.x+box1.width,box2.x+box2.width);
+const y2=Math.min(box1.y+box1.height,box2.y+box2.height);
+const intersect=Math.max(0,x2-x1)*Math.max(0,y2-y1);
+const area1=box1.width*box1.height;
+const area2=box2.width*box2.height;
+const union=area1+area2-intersect;
+return union>0?intersect/union:0;
+}
+
+// Lissage de position
+function smoothPosition(current,previous,alpha=0.7){
+return {
+x:alpha*current.x+(1-alpha)*previous.x,
+y:alpha*current.y+(1-alpha)*previous.y,
+width:alpha*current.width+(1-alpha)*previous.width,
+height:alpha*current.height+(1-alpha)*previous.height
+};
 }
 
 analyzeBtn.onclick=async()=>{
@@ -287,8 +305,8 @@ let matched=false;
 for(let p of detectedFaces){
 const avgSize=(p.faces[0].width+p.faces[0].height)/2;
 const threshold=avgSize*0.6;
-const dist=faceDistance(face,p.faces[0]);
-if(dist<threshold){
+const dist=calculateIoU(face,p.faces[0]);
+if(dist>0.3){
 p.faces.push(face);
 matched=true;
 break;
@@ -534,16 +552,16 @@ processBtn.disabled=true;
 mainSection.classList.add('hidden');
 processingSection.classList.remove('hidden');
 
-// Initialiser les trackers
+// Initialiser les trackers avec historique de positions
 activeTrackers={};
 detectedFaces.forEach(p=>{
 if(selectedFaceIds.has(p.id)){
 activeTrackers[p.id]={
-lastPosition:null,
+positions:[],
 lastSeen:0,
-confidence:1,
+framesLost:0,
 velocity:{x:0,y:0},
-searchRadius:150
+acceleration:{x:0,y:0}
 };
 }
 });
@@ -596,7 +614,7 @@ height:h*(1+pad)
 };
 });
 
-// Matcher et appliquer le flou
+// Matcher et appliquer le flou avec IoU
 const matched=new Set();
 for(let id of selectedFaceIds){
 const tracker=activeTrackers[id];
@@ -604,24 +622,35 @@ const person=detectedFaces.find(p=>p.id===id);
 if(!person)continue;
 
 let bestFace=null;
-let bestDist=Infinity;
+let bestScore=0;
+
+// Prédire la position si on a un historique
+let predictedBox=null;
+if(tracker.positions.length>0){
+const last=tracker.positions[tracker.positions.length-1];
+predictedBox={
+x:last.x+tracker.velocity.x*2+tracker.acceleration.x*2,
+y:last.y+tracker.velocity.y*2+tracker.acceleration.y*2,
+width:last.width,
+height:last.height
+};
+}
 
 // Chercher le meilleur match
 for(let cf of currentFaces){
 if(matched.has(cf))continue;
 
-let dist;
-if(tracker.lastPosition){
-dist=faceDistance(cf,tracker.lastPosition);
-// Dans le rayon de recherche?
-if(dist>tracker.searchRadius)continue;
+let score=0;
+if(predictedBox){
+// Scorer avec IoU par rapport à la prédiction
+score=calculateIoU(cf,predictedBox);
 }else{
-// Première frame: comparer avec base
-dist=Math.min(...person.faces.map(f=>faceDistance(cf,f)));
+// Première détection: comparer avec base
+score=Math.max(...person.faces.map(f=>calculateIoU(cf,f)));
 }
 
-if(dist<bestDist){
-bestDist=dist;
+if(score>bestScore&&score>0.3){
+bestScore=score;
 bestFace=cf;
 }
 }
@@ -631,24 +660,44 @@ let faceToBlur=null;
 if(bestFace){
 // Match trouvé
 matched.add(bestFace);
-tracker.lastPosition={...bestFace};
+tracker.framesLost=0;
 tracker.lastSeen=frameNum;
-tracker.confidence=Math.min(1,tracker.confidence+0.1);
-if(tracker.lastPosition.vx!==undefined){
-tracker.velocity.x=bestFace.x-tracker.lastPosition.x;
-tracker.velocity.y=bestFace.y-tracker.lastPosition.y;
+
+// Lisser la position
+let smoothed=bestFace;
+if(tracker.positions.length>0){
+smoothed=smoothPosition(bestFace,tracker.positions[tracker.positions.length-1],0.7);
 }
-faceToBlur=bestFace;
-tracker.searchRadius=Math.max(bestFace.width,bestFace.height)*2;
-}else if(tracker.lastPosition&&(frameNum-tracker.lastSeen)<20){
-// Prédiction
-tracker.confidence*=0.9;
-if(tracker.confidence>0.3){
+
+// Calculer vélocité et accélération
+if(tracker.positions.length>0){
+const prev=tracker.positions[tracker.positions.length-1];
+const newVx=smoothed.x-prev.x;
+const newVy=smoothed.y-prev.y;
+tracker.acceleration.x=newVx-tracker.velocity.x;
+tracker.acceleration.y=newVy-tracker.velocity.y;
+tracker.velocity.x=newVx;
+tracker.velocity.y=newVy;
+}
+
+tracker.positions.push(smoothed);
+if(tracker.positions.length>10)tracker.positions.shift();
+
+faceToBlur=smoothed;
+
+}else{
+// Pas de match: prédiction
+tracker.framesLost++;
+
+if(tracker.framesLost<30&&tracker.positions.length>0){
+const last=tracker.positions[tracker.positions.length-1];
+// Prédiction avec décélération
+const decayFactor=Math.max(0,1-tracker.framesLost*0.05);
 faceToBlur={
-x:tracker.lastPosition.x+tracker.velocity.x*1.5,
-y:tracker.lastPosition.y+tracker.velocity.y*1.5,
-width:tracker.lastPosition.width,
-height:tracker.lastPosition.height
+x:last.x+tracker.velocity.x*tracker.framesLost*decayFactor,
+y:last.y+tracker.velocity.y*tracker.framesLost*decayFactor,
+width:last.width,
+height:last.height
 };
 }
 }
@@ -656,7 +705,13 @@ height:tracker.lastPosition.height
 if(faceToBlur){
 processCtx.save();
 processCtx.beginPath();
-processCtx.ellipse(faceToBlur.x+faceToBlur.width/2,faceToBlur.y+faceToBlur.height/2,faceToBlur.width/2,faceToBlur.height/2,0,0,2*Math.PI);
+processCtx.ellipse(
+faceToBlur.x+faceToBlur.width/2,
+faceToBlur.y+faceToBlur.height/2,
+faceToBlur.width/2,
+faceToBlur.height/2,
+0,0,2*Math.PI
+);
 processCtx.clip();
 processCtx.filter=`blur(${blur}px)`;
 processCtx.drawImage(video,0,0);
@@ -697,6 +752,7 @@ a.click();
 restartBtn.onclick=()=>{
 resultSection.classList.add('hidden');
 mainSection.classList.add('hidden');
+document.querySelector('.app-container').classList.remove('dark-mode');
 $('upload-section').classList.remove('hidden');
 if(videoURL)URL.revokeObjectURL(videoURL);
 videoURL=null;
